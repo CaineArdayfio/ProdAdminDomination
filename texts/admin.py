@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Recipient, Product, ProductCategory
+from .models import Recipient, Product, ProductCampaign
 
 
 @admin.register(Recipient)
@@ -14,7 +14,7 @@ class RequestDemoAdmin(admin.ModelAdmin):
                     Product._meta.get_fields()]
 
 
-@admin.register(ProductCategory)
+@admin.register(ProductCampaign)
 class RequestDemoAdmin(admin.ModelAdmin):
     list_display = ('name', 'gender', 'type')  # [field.name for field in
-    # ProductCategory._meta.get_fields()]
+    # ProductCampaign._meta.get_fields()]

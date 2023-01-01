@@ -1,18 +1,18 @@
 # from django.contrib.auth.models import User
-from texts.models import Recipient, Product, ProductCategory
+from texts.models import Recipient, Product, ProductCampaign
 from django.http import HttpResponse
 from twilio.rest import Client
 import os
 from django.views.decorators.csrf import csrf_exempt
 from twilio.twiml.messaging_response import MessagingResponse
 from django.shortcuts import get_object_or_404
-
+from . import stripe_api
 
 account_sid = "AC2fe3275a720968152c8ace5b153283e3"
 auth_token = os.environ["TWILIO_AUTH_TOKEN"]
 client = Client(account_sid, auth_token)
 
-DEBUG = True
+DEBUG = False
 
 
 def send_message(phone: str, message: str):
@@ -27,27 +27,33 @@ def send_message(phone: str, message: str):
 
 
 @ csrf_exempt
-def index(request):
-    productCategory = request.POST.get('ProductCategory')
+def send_product_to_phone(request):
+    productCampaign = request.POST.get('ProductCampaign')
     recipientPhone = request.POST.get('RecipientPhone')
 
-    productCategory = ProductCategory.objects.get(name=productCategory)
+    productCampaign = ProductCampaign.objects.get(name=productCampaign)
 
-    targetCustomer = Recipient.objects.get(phone=recipientPhone)
-    targetCustomer.current_offering = productCategory
+    if(Recipient.objects.filter(phone=recipientPhone).exists()):
+        targetCustomer = Recipient.objects.get(phone=recipientPhone)
+        targetCustomer.current_campaign = productCampaign
+        targetCustomer.save()
+    else:
+        targetCustomer = Recipient.objects.create(
+            phone=recipientPhone, current_campaign=productCampaign)
+
+    targetCustomer.state = "UnknownPreference"
     targetCustomer.save()
-
-    message = f"Do you want to purchase the {productCategory.name}? Respond YES to purchase or NO to decline."
+    message = f"Do you want to purchase the {productCampaign.name}? Respond YES to purchase or NO to decline."
     send_message(recipientPhone, message)
 
     return HttpResponse(f"Text message sent!\n\n {message}")
 
 
 def getUserMetadata(currUser: Recipient):
-    offeringType = currUser.current_offering.type
-    if(offeringType == "Bottoms"):
+    offeringType = currUser.current_campaign.type
+    if(offeringType == "Bottoms" and currUser.bottom_sizes != ""):
         return currUser.bottom_sizes
-    elif(offeringType == "Tops"):
+    elif(offeringType == "Tops" and currUser.top_sizes != ""):
         return currUser.top_sizes
     else:
         return None
@@ -63,8 +69,23 @@ def sentDataIsPaymentData():
     return True
 
 
-def stripeConfirmedData():
-    return True
+def stripeConfirmedData(user: Recipient, card: str):
+    status, token = stripe_api.isValidCard(card, "123", "12", "2030")
+    if status == "success":
+        print(token)
+        # check if token has an attribute error
+        if("error" in token.__dict__ and token.error.message != ""):
+            # return False
+            print(token.error.message)
+            return False
+        #stripe_api.createCustomer(token, user.phone[1:])
+        return True
+    elif status == "fail":
+        return False
+
+    else:
+        raise Exception("Invalid status from stripe_api.isValidCard")
+
 # Takes the user's current state AND a text message THEN returns the next state
 # We should do next_state if this state is a process sate with no presence in State2Response
 # We should not do next_state if this state has a presence
@@ -88,7 +109,9 @@ def next_text_state(currUser: Recipient, response: str):
         if getUserMetadata(currUser) != None:
             return "MetadataExists"
         else:
-            return next_text_state("NoneOrIncorrectMetadata", response)
+            #currUser.state = "NoneOrIncorrectMetadata"
+            # currUser.save()
+            return "NoneOrIncorrectMetadata"
     elif state == "NegativePurchase":
         send_message(currUser.phone, "Thanks for your time!")
         return "Terminated"
@@ -103,9 +126,9 @@ def next_text_state(currUser: Recipient, response: str):
             return "InvalidState"
     elif state == "NoneOrIncorrectMetadata":
         if response == "S" or response == "M" or response == "L" or response == "XL":
-            if(currUser.current_offering.type == "Tops"):
+            if(currUser.current_campaign.type == "Tops"):
                 currUser.top_sizes = response
-            elif currUser.current_offering.type == "Bottoms":
+            elif currUser.current_campaign.type == "Bottoms":
                 currUser.bottom_sizes = response
             else:
                 raise Exception("Invalid offering type")
@@ -132,7 +155,7 @@ def next_text_state(currUser: Recipient, response: str):
             return next_text_state(currUser, response)
     elif state == "PaymentRequested":
         # Stripe confirms that their data is good
-        if stripeConfirmedData():
+        if stripeConfirmedData(currUser, response):
             currUser.state = "PaymentAndMetadataCorrect"
             currUser.save()
             return next_text_state(currUser, response)
@@ -145,6 +168,8 @@ def next_text_state(currUser: Recipient, response: str):
         return "NoPaymentData"
     elif state == "PaymentAndMetadataCorrect":
         send_message(currUser.phone, "Purchase made. Here is your receipt: ")
+        send_message(
+            currUser.phone, f"Item: {currUser.current_campaign.name} (id: 1234-5678) \nSize: {getUserMetadata(currUser)}\nPrice: $110.00")
         return "Terminated"
     elif state == "Terminated":
         return "Terminated"
@@ -180,6 +205,7 @@ def State2Response(recipient: Recipient, state: str):
 
 @ csrf_exempt
 def text_received(request):
+
     phone = request.POST.get('From')
     body = request.POST.get('Body')
     recipient = Recipient.objects.filter(
@@ -195,21 +221,19 @@ def text_received(request):
     # get the user's next state that requires a prompt
     nextTextState = next_text_state(recipient, body)
 
-    # set the user's new state
-    recipient.state = nextTextState
-    recipient.save()
+    if(nextTextState != "InvalidState"):
+        # set the user's new state
+        recipient.state = nextTextState
+        recipient.save()
 
     resp = MessagingResponse()
 
     if(nextTextState == "Terminated" and prevState == "Terminated"):
         resp.message("No prompt associated with message")
-        return str(resp)
+        return HttpResponse(str(resp))
 
     response = State2Response(recipient, nextTextState)
     resp.message(response)
-    ### TEST ###
-    send_message("+13176930478", response)
-    ### TEST ###
 
     # if(nextTextState == "Terminated" and prevState != "Terminated"):
     # the og: https://support.twilio.com/hc/en-us/articles/223134127-Receive-SMS-and-MMS-Messages-without-Responding

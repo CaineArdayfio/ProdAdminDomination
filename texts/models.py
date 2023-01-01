@@ -4,7 +4,7 @@ from model_utils import Choices
 from decimal import Decimal
 
 
-class ProductCategory(models.Model):
+class ProductCampaign(models.Model):
     name = models.CharField(max_length=100)
     GENDER = Choices("Male", "Female", "Unisex")
     gender = models.CharField(
@@ -17,7 +17,7 @@ class ProductCategory(models.Model):
     def save(self, *args, **kwargs):
         # Full clean throws an error if the chosen state is not
         self.full_clean()
-        super(ProductCategory, self).save(*args, **kwargs)
+        super(ProductCampaign, self).save(*args, **kwargs)
 
     def __str__(self):
         return '{}'.format(self.name)
@@ -29,8 +29,8 @@ class Recipient(models.Model):
                     'MetadataExists', 'CorrectMetadata', 'NoPaymentData', 'PaymentRequested', 'InvalidPaymentDetails', 'PaymentAndMetadataCorrect', 'Terminated')
     state = models.CharField(
         max_length=30, choices=STATE, default=STATE.UnknownPreference)
-    current_offering = models.ForeignKey(
-        ProductCategory, on_delete=models.CASCADE, blank=True)
+    current_campaign = models.ForeignKey(
+        ProductCampaign, on_delete=models.CASCADE, blank=True)
 
     # Clothing
     SIZES = Choices('XS', 'S', 'M', 'L', 'XL')
@@ -51,7 +51,7 @@ class Product(models.Model):
     product_id = models.CharField(
         max_length=100, unique=True, primary_key=True)
     product_category = models.ForeignKey(
-        ProductCategory, on_delete=models.CASCADE)
+        ProductCampaign, on_delete=models.CASCADE)
     # Store numbers up to 9,999.99 with a resolution of two decimal places
     price = models.DecimalField(
         max_digits=6, decimal_places=2, default=Decimal(0.00))
